@@ -1,26 +1,25 @@
-use rdev::{listen, simulate, EventType, Key};
-use std::sync::mpsc;
-use std::thread;
+use enigo::{self, Direction, Keyboard};
+use gilrs::{self, Event, EventType};
 
 fn main() {
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        listen(move |event| {
-            tx.send(match event.event_type {
-                EventType::KeyPress(Key::KeyA) => 0,
-                EventType::KeyRelease(Key::KeyA) => 1,
-                _ => return,
-            })
-            .unwrap();
-        })
-        .unwrap();
-    });
-    for event in rx {
-        simulate(&match event {
-            1 => EventType::KeyPress(Key::KeyX),
-            0 => EventType::KeyRelease(Key::KeyX),
+    let mut gilrs = gilrs::Gilrs::new().unwrap();
+    let mut enigo = enigo::Enigo::new(&enigo::Settings::default()).unwrap();
+
+    let mut hold = gilrs.gamepads().count() != 0;
+    while let Some(Event { event, .. }) = gilrs.next_event_blocking(None) {
+        hold = match event {
+            EventType::Disconnected => false,
+            EventType::Connected => true,
+            EventType::ButtonPressed(gilrs::Button::LeftTrigger2, _)
+            | EventType::ButtonPressed(gilrs::Button::RightTrigger2, _)
+            | EventType::ButtonReleased(gilrs::Button::RightTrigger2, _) => !hold,
             _ => continue,
-        })
-        .unwrap();
+        };
+        let dir = if hold {
+            Direction::Press
+        } else {
+            Direction::Release
+        };
+        enigo.key(enigo::Key::X, dir).unwrap();
     }
 }
