@@ -1,11 +1,7 @@
 [package]
 name = "autofire"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
-
-[dependencies]
-enigo = "0.2.1"
-gilrs = { version = "0.10.7", features = ["xinput"], default-features = false }
 
 [profile.release]
 opt-level = "z"
