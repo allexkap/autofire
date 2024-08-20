@@ -1,10 +1,10 @@
 #include <stdio.h>
-#include <Windows.h>
-#include <Xinput.h>
+#include <windows.h>
+#include <xinput.h>
 
 #define eprintf(...) fprintf(stderr, ##__VA_ARGS__)
 #define ret_if_not(condition, code) \
-  if (!condition) return code
+  if (!(condition)) return code
 
 typedef struct {
   HMODULE(__cdecl *GetModuleHandleA)(LPCSTR);
@@ -12,6 +12,9 @@ typedef struct {
   BOOL(__stdcall *VirtualProtect)(LPVOID, SIZE_T, DWORD, PDWORD);
   char strDll[14];
   char strFunc[15];
+  char strCheck[25];
+  char strReplace[25];
+  size_t patchOffset;
 } ParamsEx;
 
 DWORD inject_code(DWORD pid, LPCVOID fun, SIZE_T funSize, LPCVOID params, SIZE_T paramsSize) {
@@ -56,38 +59,26 @@ open_error:
   return ExitCode;
 }
 
-DWORD test_func(ParamsEx *params) {
+DWORD patch_fun(const ParamsEx *params) {
   HMODULE xlib = params->GetModuleHandleA(params->strDll);
-  ret_if_not(xlib, 3);
+  ret_if_not(xlib, 2);
   FARPROC func = params->GetProcAddress(xlib, params->strFunc);
-  ret_if_not(func, 4);
+  ret_if_not(func, 3);
+  char *patchAddr = (size_t)func + params->patchOffset;
 
-  size_t imageBase = (size_t)params->GetModuleHandleA(NULL);
-  ret_if_not(imageBase, 5);
+  size_t pos = 0;
+  while (pos < sizeof(params->strCheck) && patchAddr[pos] == params->strCheck[pos]) ++pos;
+  ret_if_not(pos == sizeof(params->strCheck), 4);
 
-  PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)(imageBase);
-  PIMAGE_NT_HEADERS ntHeaders = (PIMAGE_NT_HEADERS)(imageBase + dosHeader->e_lfanew);
-  PIMAGE_OPTIONAL_HEADER optionalHeader = &(ntHeaders->OptionalHeader);  // o_o
+  DWORD old;
+  params->VirtualProtect(patchAddr, sizeof(params->strReplace), PAGE_READWRITE, &old);
 
-  IMAGE_DATA_DIRECTORY importDirectory = optionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-  PIMAGE_IMPORT_DESCRIPTOR importDescriptor = (PIMAGE_IMPORT_DESCRIPTOR)(imageBase + importDirectory.VirtualAddress);
+  pos = sizeof(params->strReplace);
+  while (pos-- > 0) (patchAddr)[pos] = params->strReplace[pos];
 
-  while (importDescriptor->Name) {
-    PIMAGE_THUNK_DATA thunk = (PIMAGE_THUNK_DATA)(imageBase + importDescriptor->FirstThunk);
-    while (thunk->u1.AddressOfData) {
-      if (thunk->u1.Function == (size_t)func) {
-        void *ptr = &thunk->u1.Function;
-        DWORD old;
-        params->VirtualProtect(ptr, 8, PAGE_READWRITE, &old);
-        thunk->u1.Function = (size_t)thunk->u1.Function;  // test
-        params->VirtualProtect(ptr, 8, old, &old);
-        return 0;
-      }
-      ++thunk;
-    }
-    ++importDescriptor;
-  }
-  return 2;
+  params->VirtualProtect(patchAddr, sizeof(params->strReplace), old, &old);
+
+  return 0;
 }
 
 int main(int argc, char const *argv[]) {
@@ -98,12 +89,21 @@ int main(int argc, char const *argv[]) {
   int pid = atoi(argv[1]);
 
   int fun_len = 0;
-  while (((BYTE *)test_func)[fun_len++] != 0xC3);
-  ParamsEx params = {GetModuleHandleA, GetProcAddress, VirtualProtect, "XInput1_4.dll", "XInputGetState"};
+  while (((BYTE *)patch_fun)[fun_len++] != 0xC3);
+  ParamsEx params = {
+      GetModuleHandleA,
+      GetProcAddress,
+      VirtualProtect,
+      "XInput1_4.dll",
+      "XInputGetState",
+      "\x8b\xc3\x48\x8b\x5c\x24\x50\x48\x83\xc4\x30\x41\x5e\x5f\x5e\xc3\xcc\xcc\xcc\xcc\xcc\xcc\xcc\xcc\xcc",
+      "\xb8\xff\x00\x00\x00\x66\x31\x47\x07\x8b\xc3\x48\x8b\x5c\x24\x50\x48\x83\xc4\x30\x41\x5e\x5f\x5e\xc3",
+      340,
+  };
 
   eprintf("fun_len = %d\n", fun_len);
 
-  int exit_code = inject_code(pid, &test_func, fun_len, &params, sizeof(params));
+  int exit_code = inject_code(pid, &patch_fun, fun_len, &params, sizeof(params));
   printf("exit_code = %u\n", exit_code);
 
   return 0;
