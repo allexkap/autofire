@@ -1,5 +1,21 @@
-use std::io::Write;
+#![windows_subsystem = "windows"]
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+use windows::{
+    core::{w, PCWSTR},
+    Win32::UI::{
+        HiDpi,
+        WindowsAndMessaging::{
+            MessageBoxW, IDNO, IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK,
+            MB_YESNO, MB_YESNOCANCEL, MESSAGEBOX_RESULT, MESSAGEBOX_STYLE,
+        },
+    },
+};
+
+const DLL_PATH: &str = "C:/Windows/System32/XInput1_4.dll";
 const DEFAULT_PATH: &str = "C:/Program Files (x86)/Steam/steamapps/common/Cuphead";
 const BYTECODE: [[u8; 25]; 2] = [
     [
@@ -25,42 +41,81 @@ fn substitute<T: Clone>(data: &mut [T], req: &[T], i: usize) {
         .for_each(|(d, b)| *d = b.clone());
 }
 
-fn pause() {
-    std::process::Command::new("cmd.exe")
-        .arg("/c")
-        .arg("pause")
-        .status()
-        .unwrap();
-}
-
-fn patch() -> std::io::Result<usize> {
-    let mut data = std::fs::read("C:/Windows/System32/XInput1_4.dll")?;
-    let mut path = String::new();
-
-    println!("default path {DEFAULT_PATH}");
-    print!("custom path or nothing: ");
-    std::io::stdout().flush()?;
-    std::io::stdin().read_line(&mut path)?;
-    path = path.lines().next().unwrap().into();
-    if path.len() == 0 {
-        path = DEFAULT_PATH.into();
-    }
-    path.push_str("/XInput1_4.dll");
-
+fn patch(dst_path: &Path) -> std::io::Result<usize> {
+    let mut data = std::fs::read(DLL_PATH)?;
     let indexes = find_all(&data, &BYTECODE[0]);
     if indexes.len() == 1 {
         substitute(&mut data, &BYTECODE[1], indexes[0]);
-        std::fs::write(path, data)?;
+        std::fs::write(dst_path, data)?;
     }
     Ok(indexes.len())
 }
 
+fn msg_box(lptext: PCWSTR, utype: MESSAGEBOX_STYLE) -> MESSAGEBOX_RESULT {
+    unsafe { MessageBoxW(None, lptext, w!("Autofire"), utype) }
+}
+
+fn to_pcwstr(data: &str) -> (PCWSTR, Vec<u16>) {
+    let vec = data.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    (PCWSTR(vec.as_ptr()), vec)
+}
+
 fn main() {
-    match patch() {
-        Err(err) => println!("{}", err),
-        Ok(0) => println!("pattern not found"),
-        Ok(1) => println!("successfully"),
-        Ok(_) => println!("multiple matches"),
+    unsafe {
+        let _ = HiDpi::SetProcessDpiAwarenessContext(HiDpi::DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
     }
-    pause();
+
+    let mut path: PathBuf = DEFAULT_PATH.into();
+
+    let skip_pick = if path.exists() {
+        match msg_box(
+            to_pcwstr(&format!("Использовать путь по умолчанию?\n{DEFAULT_PATH}")).0,
+            MB_YESNOCANCEL | MB_ICONQUESTION,
+        ) {
+            IDYES => true,
+            IDNO => false,
+            _ => return,
+        }
+    } else {
+        false
+    };
+
+    if !skip_pick {
+        path = rfd::FileDialog::new()
+            .set_title("Select Cuphead folder")
+            .pick_folder()
+            .unwrap();
+    }
+
+    path.push("XInput1_4.dll");
+    let res = if path.exists() {
+        if msg_box(
+            w!("Патч уже установлен. Удалить?"),
+            MB_YESNO | MB_ICONQUESTION,
+        ) != IDYES
+        {
+            return;
+        }
+        match fs::remove_file(path) {
+            Ok(()) => Ok("Патч удален".to_owned()),
+            Err(err) => Err(err.to_string()),
+        }
+    } else {
+        match patch(path.as_path()) {
+            Ok(1) => Ok("Патч установлен".to_owned()),
+            Ok(_) => Err("Неподдерживаемая библиотека".to_owned()),
+            Err(err) => Err(err.to_string()),
+        }
+    };
+
+    let utype = if res.is_ok() {
+        MB_ICONINFORMATION
+    } else {
+        MB_ICONERROR
+    } | MB_OK;
+    let lptext = to_pcwstr(&match res {
+        Ok(text) => text,
+        Err(text) => text,
+    });
+    msg_box(lptext.0, utype);
 }
