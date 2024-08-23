@@ -1,4 +1,7 @@
+use native_windows_gui::{self as nwg, NativeUi};
 use std::io::Write;
+
+mod mygui;
 
 const DEFAULT_PATH: &str = "C:/Program Files (x86)/Steam/steamapps/common/Cuphead";
 const BYTECODE: [[u8; 25]; 2] = [
@@ -56,11 +59,9 @@ fn patch() -> std::io::Result<usize> {
 }
 
 fn main() {
-    match patch() {
-        Err(err) => println!("{}", err),
-        Ok(0) => println!("pattern not found"),
-        Ok(1) => println!("successfully"),
-        Ok(_) => println!("multiple matches"),
-    }
-    pause();
+    mygui::init();
+
+    let _app = mygui::App::build_ui(Default::default()).expect("Failed to build UI");
+
+    nwg::dispatch_thread_events();
 }
